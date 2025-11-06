@@ -16,7 +16,24 @@ const canvas = document.createElement("canvas");
 canvas.width = 256;
 canvas.height = 256;
 canvas.id = "sketch-canvas";
-app.appendChild(canvas);
+
+// Wrap canvas so we can layer an overlay for the cursor without redrawing strokes
+const canvasWrap = document.createElement("div");
+canvasWrap.style.position = "relative";
+canvasWrap.style.display = "inline-block";
+app.appendChild(canvasWrap);
+canvasWrap.appendChild(canvas);
+
+// Overlay canvas for cursor preview (drawn separately so we don't redraw strokes on every mouse move)
+const overlay = document.createElement("canvas");
+overlay.width = canvas.width;
+overlay.height = canvas.height;
+overlay.id = "overlay-canvas";
+overlay.style.position = "absolute";
+overlay.style.left = "0";
+overlay.style.top = "0";
+overlay.style.pointerEvents = "none"; // let mouse events pass through to the main canvas
+canvasWrap.appendChild(overlay);
 
 // Controls container
 const controls = document.createElement("div");
@@ -43,6 +60,7 @@ type Stroke = { points: Point[]; width: number };
 
 let isDrawing = false;
 const ctx = canvas.getContext("2d");
+const octx = overlay.getContext("2d");
 if (ctx) {
   ctx.lineWidth = 2;
   ctx.lineCap = "round";
@@ -57,6 +75,8 @@ const redoStack: Stroke[][] = [];
 
 // Thickness controls (two options)
 let currentThickness = 2; // default thickness (pixels)
+// remember last tool/mouse position while over the canvas so we can update overlay when thickness changes
+let lastToolPos: Point | null = null;
 const thicknessLabel = document.createElement("span");
 thicknessLabel.textContent = "Thickness: ";
 controls.appendChild(thicknessLabel);
@@ -80,6 +100,10 @@ function setThickness(n: number) {
     thickBtn.classList.add("active");
     thinBtn.classList.remove("active");
   }
+  // If we have a last-known tool position (cursor over canvas), update the overlay so the new thickness is shown
+  if (lastToolPos) {
+    drawCursorOverlay(lastToolPos, currentThickness);
+  }
 }
 
 thinBtn.addEventListener("click", () => setThickness(2));
@@ -95,6 +119,34 @@ function updateButtons() {
 function getCanvasPoint(e: MouseEvent) {
   const rect = canvas.getBoundingClientRect();
   return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function clearOverlay() {
+  if (!octx) return;
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+}
+
+function drawCursorOverlay(pos: Point, thickness: number) {
+  if (!octx) return;
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  // thin: draw a small filled point; thick: draw a circle outline with radius = thickness/2
+  octx.save();
+  // shift the overlay slightly downward so it visually covers where the stroke will be drawn
+  const offsetY = Math.round(thickness / 2);
+  const drawY = pos.y + offsetY;
+  if (thickness <= 2) {
+    octx.fillStyle = "rgba(0,0,0,0.9)";
+    octx.beginPath();
+    octx.arc(pos.x, drawY, 1.5, 0, Math.PI * 2);
+    octx.fill();
+  } else {
+    octx.strokeStyle = "rgba(0,0,0,0.9)";
+    octx.lineWidth = 1;
+    octx.beginPath();
+    octx.arc(pos.x, drawY, thickness / 2, 0, Math.PI * 2);
+    octx.stroke();
+  }
+  octx.restore();
 }
 
 // Redraw handler: clears canvas and draws all strokes from the display list
@@ -125,6 +177,17 @@ canvas.addEventListener("drawing-changed", () => {
   redraw();
 });
 
+// Observer: listen for 'tool-moved' events and draw cursor overlay
+canvas.addEventListener("tool-moved", (e) => {
+  const d = (e as CustomEvent).detail as {
+    x: number;
+    y: number;
+    thickness: number;
+  } | undefined;
+  if (!d) return;
+  drawCursorOverlay({ x: d.x, y: d.y }, d.thickness);
+});
+
 canvas.addEventListener("mousedown", (e) => {
   isDrawing = true;
   // start a new stroke and add the initial point
@@ -143,9 +206,18 @@ canvas.addEventListener("mousedown", (e) => {
 });
 
 canvas.addEventListener("mousemove", (e) => {
-  if (!isDrawing) return;
+  // always notify observers of tool movement
   const pt = getCanvasPoint(e);
-  // append to the current stroke (last in displayList)
+  // remember last position so thickness changes can refresh overlay
+  lastToolPos = pt;
+  canvas.dispatchEvent(
+    new CustomEvent("tool-moved", {
+      detail: { x: pt.x, y: pt.y, thickness: currentThickness },
+    }),
+  );
+
+  // when drawing, append to the current stroke (last in displayList)
+  if (!isDrawing) return;
   const current = displayList[displayList.length - 1];
   if (current) {
     current.points.push(pt);
@@ -154,9 +226,34 @@ canvas.addEventListener("mousemove", (e) => {
   }
 });
 
+canvas.addEventListener("mouseenter", (e) => {
+  const pt = getCanvasPoint(e as MouseEvent);
+  // hide default cursor so overlay is the visible tool
+  canvas.style.cursor = "none";
+  lastToolPos = pt;
+  canvas.dispatchEvent(
+    new CustomEvent("tool-moved", {
+      detail: { x: pt.x, y: pt.y, thickness: currentThickness },
+    }),
+  );
+});
+
+canvas.addEventListener("mouseleave", () => {
+  // restore default cursor and clear overlay when leaving
+  canvas.style.cursor = "";
+  clearOverlay();
+  lastToolPos = null;
+});
+
 ["mouseup", "mouseout"].forEach((event) => {
   canvas.addEventListener(event, () => {
     isDrawing = false;
+    if (event === "mouseout") {
+      // leaving canvas via mouseout: restore cursor and clear overlay
+      canvas.style.cursor = "";
+      clearOverlay();
+      lastToolPos = null;
+    }
   });
 });
 
