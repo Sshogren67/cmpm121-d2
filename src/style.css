@@ -10,3 +10,62 @@
   box-shadow: 4px 4px 8px rgba(0, 0, 0, 0.3);
   margin: 10px 0;
 }
+
+/* Controls layout */
+.controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.controls button {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background: white;
+  cursor: pointer;
+}
+
+.controls button.active {
+  border-color: #444;
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.05);
+}
+
+/* Stamp buttons show their emoji via CSS so we can style/font-size independently */
+.stamp-btn {
+  width: 40px;
+  height: 36px;
+  padding: 0;
+  position: relative;
+}
+.stamp-btn::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 20px;
+}
+.stamp-frisbee::before {
+  content: "🥏";
+}
+.stamp-frog::before {
+  content: "🐸";
+}
+.stamp-hand::before {
+  content: "✋";
+}
+
+.stamp-btn.active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid #007acc;
+  border-radius: 6px;
+}
+
+#overlay-canvas {
+  pointer-events: none;
+}

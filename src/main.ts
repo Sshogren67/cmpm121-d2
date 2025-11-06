@@ -57,6 +57,7 @@ controls.appendChild(clearBtn);
 // Simple drawing logic using a display list + observer
 type Point = { x: number; y: number };
 type Stroke = { points: Point[]; width: number };
+type Stamp = { emoji: string; x: number; y: number; size: number };
 
 let isDrawing = false;
 const ctx = canvas.getContext("2d");
@@ -67,11 +68,25 @@ if (ctx) {
   ctx.strokeStyle = "black";
 }
 
-// Display list: array of strokes. Each stroke holds points + width.
-const displayList: Stroke[] = [];
-// Undo/Redo stacks. We'll push copies of strokes (shallow copy of points arrays and width)
-const undoStack: Stroke[][] = [];
-const redoStack: Stroke[][] = [];
+// Display list: array of strokes or stamps.
+const displayList: (Stroke | Stamp)[] = [];
+// Undo/Redo stacks. We'll push copies of the displayList state.
+const undoStack: (Stroke | Stamp)[][] = [];
+const redoStack: (Stroke | Stamp)[][] = [];
+
+function copyDisplayList(): (Stroke | Stamp)[] {
+  return displayList.map((item) => {
+    if ("points" in item) {
+      return { points: item.points.slice(), width: item.width } as Stroke;
+    }
+    return {
+      emoji: item.emoji,
+      x: item.x,
+      y: item.y,
+      size: item.size,
+    } as Stamp;
+  });
+}
 
 // Thickness controls (two options)
 let currentThickness = 2; // default thickness (pixels)
@@ -93,6 +108,8 @@ controls.appendChild(thickBtn);
 
 function setThickness(n: number) {
   currentThickness = n;
+  // switching thickness reverts tool back to drawing (lines)
+  clearToolSelection();
   if (n === 2) {
     thinBtn.classList.add("active");
     thickBtn.classList.remove("active");
@@ -108,6 +125,57 @@ function setThickness(n: number) {
 
 thinBtn.addEventListener("click", () => setThickness(2));
 thickBtn.addEventListener("click", () => setThickness(6));
+
+// Tool selection: either drawing (null) or a stamp emoji
+let currentToolEmoji: string | null = null;
+// Stamp buttons (below thickness buttons) — placed in their own row so they appear under thickness controls
+const stampsRow = document.createElement("div");
+stampsRow.style.display = "flex";
+stampsRow.style.gap = "8px";
+stampsRow.style.alignItems = "center";
+stampsRow.style.flexBasis = "100%"; // force new row
+controls.appendChild(stampsRow);
+
+const stampsLabel = document.createElement("span");
+stampsLabel.textContent = "Stamps: ";
+stampsRow.appendChild(stampsLabel);
+
+const stampFrisbee = document.createElement("button");
+stampFrisbee.className = "stamp-btn stamp-frisbee";
+stampFrisbee.setAttribute("aria-label", "Frisbee stamp");
+stampsRow.appendChild(stampFrisbee);
+
+const stampFrog = document.createElement("button");
+stampFrog.className = "stamp-btn stamp-frog";
+stampFrog.setAttribute("aria-label", "Frog stamp");
+stampsRow.appendChild(stampFrog);
+
+const stampHand = document.createElement("button");
+stampHand.className = "stamp-btn stamp-hand";
+stampHand.setAttribute("aria-label", "Hand stamp");
+stampsRow.appendChild(stampHand);
+
+function clearToolSelection() {
+  currentToolEmoji = null;
+  stampFrisbee.classList.remove("active");
+  stampFrog.classList.remove("active");
+  stampHand.classList.remove("active");
+}
+
+function selectStamp(button: HTMLButtonElement, emoji: string) {
+  if (currentToolEmoji === emoji) {
+    // toggle off
+    clearToolSelection();
+    return;
+  }
+  clearToolSelection();
+  currentToolEmoji = emoji;
+  button.classList.add("active");
+}
+
+stampFrisbee.addEventListener("click", () => selectStamp(stampFrisbee, "🥏"));
+stampFrog.addEventListener("click", () => selectStamp(stampFrog, "🐸"));
+stampHand.addEventListener("click", () => selectStamp(stampHand, "✋"));
 
 function updateButtons() {
   undoBtn.disabled = undoStack.length === 0;
@@ -155,20 +223,35 @@ function redraw() {
   // clear
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // draw each stroke (respect stored width)
-  for (const stroke of displayList) {
-    if (!stroke || stroke.points.length === 0) continue;
-    const first = stroke.points[0];
-    if (!first) continue;
-    ctx.beginPath();
-    ctx.lineWidth = stroke.width;
-    ctx.moveTo(first.x, first.y);
-    for (let i = 1; i < stroke.points.length; i++) {
-      const p = stroke.points[i];
-      if (!p) continue;
-      ctx.lineTo(p.x, p.y);
+  // draw each item in the display list (strokes and stamps)
+  for (const item of displayList) {
+    if (!item) continue;
+    if ("points" in item) {
+      const stroke = item as Stroke;
+      if (!stroke.points || stroke.points.length === 0) continue;
+      const first = stroke.points[0];
+      if (!first) continue;
+      ctx.beginPath();
+      ctx.lineWidth = stroke.width;
+      ctx.moveTo(first.x, first.y);
+      for (let i = 1; i < stroke.points.length; i++) {
+        const p = stroke.points[i];
+        if (!p) continue;
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    } else {
+      // stamp
+      const stamp = item as Stamp;
+      if (!stamp) continue;
+      // draw emoji centered at stamp.x, stamp.y
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `${stamp.size}px serif`;
+      ctx.fillText(stamp.emoji, stamp.x, stamp.y);
+      ctx.restore();
     }
-    ctx.stroke();
   }
 }
 
@@ -189,15 +272,30 @@ canvas.addEventListener("tool-moved", (e) => {
 });
 
 canvas.addEventListener("mousedown", (e) => {
+  const pt = getCanvasPoint(e);
+  // If a stamp tool is selected, place a stamp instead of starting a stroke
+  if (currentToolEmoji) {
+    // snapshot for undo
+    undoStack.push(copyDisplayList());
+    redoStack.length = 0;
+    // place stamp; align vertically with stroke offset so it lines up visually
+    const offsetY = Math.round(currentThickness / 2);
+    const stampY = pt.y + offsetY;
+    const size = Math.max(12, currentThickness * 8);
+    const stamp: Stamp = { emoji: currentToolEmoji, x: pt.x, y: stampY, size };
+    displayList.push(stamp);
+    canvas.dispatchEvent(new CustomEvent("drawing-changed"));
+    updateButtons();
+    return;
+  }
+
+  // start drawing stroke
   isDrawing = true;
   // start a new stroke and add the initial point
-  const pt = getCanvasPoint(e);
   // When starting a new stroke, clear redo stack (new branch)
   redoStack.length = 0;
   // push current state to undo stack (shallow copy of strokes and their points)
-  undoStack.push(
-    displayList.map((s) => ({ points: s.points.slice(), width: s.width })),
-  );
+  undoStack.push(copyDisplayList());
   const stroke: Stroke = { points: [pt], width: currentThickness };
   displayList.push(stroke);
   // notify observers that the drawing changed
@@ -219,7 +317,7 @@ canvas.addEventListener("mousemove", (e) => {
   // when drawing, append to the current stroke (last in displayList)
   if (!isDrawing) return;
   const current = displayList[displayList.length - 1];
-  if (current) {
+  if (current && "points" in current) {
     current.points.push(pt);
     // notify observers that the drawing changed
     canvas.dispatchEvent(new CustomEvent("drawing-changed"));
@@ -261,15 +359,17 @@ canvas.addEventListener("mouseleave", () => {
 undoBtn.addEventListener("click", () => {
   if (undoStack.length === 0) return;
   // push current state to redo stack
-  redoStack.push(
-    displayList.map((s) => ({ points: s.points.slice(), width: s.width })),
-  );
+  redoStack.push(copyDisplayList());
   // restore last undo state
   const prev = undoStack.pop();
   displayList.length = 0;
   if (prev) {
     for (const s of prev) {
-      displayList.push({ points: s.points.slice(), width: s.width });
+      if ("points" in s) {
+        displayList.push({ points: s.points.slice(), width: s.width });
+      } else {
+        displayList.push({ emoji: s.emoji, x: s.x, y: s.y, size: s.size });
+      }
     }
   }
   canvas.dispatchEvent(new CustomEvent("drawing-changed"));
@@ -279,14 +379,16 @@ undoBtn.addEventListener("click", () => {
 redoBtn.addEventListener("click", () => {
   if (redoStack.length === 0) return;
   // push current state to undo stack
-  undoStack.push(
-    displayList.map((s) => ({ points: s.points.slice(), width: s.width })),
-  );
+  undoStack.push(copyDisplayList());
   const next = redoStack.pop();
   displayList.length = 0;
   if (next) {
     for (const s of next) {
-      displayList.push({ points: s.points.slice(), width: s.width });
+      if ("points" in s) {
+        displayList.push({ points: s.points.slice(), width: s.width });
+      } else {
+        displayList.push({ emoji: s.emoji, x: s.x, y: s.y, size: s.size });
+      }
     }
   }
   canvas.dispatchEvent(new CustomEvent("drawing-changed"));
@@ -295,9 +397,7 @@ redoBtn.addEventListener("click", () => {
 
 clearBtn.addEventListener("click", () => {
   // push current state to undo stack so clear can be undone
-  undoStack.push(
-    displayList.map((s) => ({ points: s.points.slice(), width: s.width })),
-  );
+  undoStack.push(copyDisplayList());
   displayList.length = 0;
   redoStack.length = 0;
   canvas.dispatchEvent(new CustomEvent("drawing-changed"));
