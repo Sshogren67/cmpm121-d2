@@ -1,9 +1,4 @@
-import exampleIconUrl from "./noun-paperclip-7598668-00449F.png";
 import "./style.css";
-
-document.body.innerHTML = `
-  <p>Example image asset: <img src="${exampleIconUrl}" class="icon" /></p>
-`;
 
 const app = document.createElement("div");
 document.body.appendChild(app);
@@ -107,6 +102,8 @@ thickBtn.className = "thickness-btn";
 controls.appendChild(thickBtn);
 
 function setThickness(n: number) {
+  // switching thickness returns tool to drawing mode
+  clearToolSelection();
   currentThickness = n;
   // switching thickness reverts tool back to drawing (lines)
   clearToolSelection();
@@ -176,6 +173,28 @@ function selectStamp(button: HTMLButtonElement, emoji: string) {
 stampFrisbee.addEventListener("click", () => selectStamp(stampFrisbee, "🥏"));
 stampFrog.addEventListener("click", () => selectStamp(stampFrog, "🐸"));
 stampHand.addEventListener("click", () => selectStamp(stampHand, "✋"));
+
+// Custom sticker button: prompts for an emoji and creates a new stamp button
+const addCustomBtn = document.createElement("button");
+addCustomBtn.className = "stamp-btn stamp-add";
+addCustomBtn.textContent = "+";
+addCustomBtn.title = "Add custom sticker";
+controls.appendChild(addCustomBtn);
+
+addCustomBtn.addEventListener("click", () => {
+  const v = prompt("Enter an emoji or sticker character:", "⭐");
+  if (v === null) return; // user cancelled
+  const emoji = v.trim();
+  if (!emoji) return;
+  // create a new stamp button for this emoji
+  const btn = document.createElement("button");
+  btn.className = "stamp-btn";
+  btn.textContent = emoji;
+  controls.appendChild(btn);
+  btn.addEventListener("click", () => selectStamp(btn, emoji));
+  // select the newly created stamp
+  selectStamp(btn, emoji);
+});
 
 function updateButtons() {
   undoBtn.disabled = undoStack.length === 0;
