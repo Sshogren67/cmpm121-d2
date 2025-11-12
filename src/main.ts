@@ -105,8 +105,6 @@ function setThickness(n: number) {
   // switching thickness returns tool to drawing mode
   clearToolSelection();
   currentThickness = n;
-  // switching thickness reverts tool back to drawing (lines)
-  clearToolSelection();
   if (n === 2) {
     thinBtn.classList.add("active");
     thickBtn.classList.remove("active");
@@ -179,7 +177,7 @@ const addCustomBtn = document.createElement("button");
 addCustomBtn.className = "stamp-btn stamp-add";
 addCustomBtn.textContent = "+";
 addCustomBtn.title = "Add custom sticker";
-controls.appendChild(addCustomBtn);
+stampsRow.appendChild(addCustomBtn);
 
 addCustomBtn.addEventListener("click", () => {
   const v = prompt("Enter an emoji or sticker character:", "⭐");
@@ -188,12 +186,80 @@ addCustomBtn.addEventListener("click", () => {
   if (!emoji) return;
   // create a new stamp button for this emoji
   const btn = document.createElement("button");
-  btn.className = "stamp-btn";
+  btn.className = "stamp-btn stamp-custom";
   btn.textContent = emoji;
-  controls.appendChild(btn);
+  stampsRow.appendChild(btn);
   btn.addEventListener("click", () => selectStamp(btn, emoji));
   // select the newly created stamp
   selectStamp(btn, emoji);
+});
+
+// Export button row (placed beneath the controls)
+const exportRow = document.createElement("div");
+exportRow.style.display = "flex";
+exportRow.style.gap = "8px";
+exportRow.style.flexBasis = "100%";
+controls.appendChild(exportRow);
+
+const exportBtn = document.createElement("button");
+exportBtn.textContent = "Export PNG";
+exportRow.appendChild(exportBtn);
+
+exportBtn.addEventListener("click", () => {
+  // create temporary export canvas at 1024x1024
+  const exportCanvas = document.createElement("canvas");
+  const targetSize = 1024;
+  exportCanvas.width = targetSize;
+  exportCanvas.height = targetSize;
+  const ectx = exportCanvas.getContext("2d");
+  if (!ectx) return;
+
+  // optional white background
+  ectx.fillStyle = "white";
+  ectx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+
+  const sx = exportCanvas.width / canvas.width;
+  const sy = exportCanvas.height / canvas.height;
+
+  ectx.save();
+  // scale the context so we can replay the display list using original coordinates
+  ectx.scale(sx, sy);
+
+  // replay displayList onto export context
+  for (const item of displayList) {
+    if ("points" in item) {
+      const stroke = item as Stroke;
+      if (!stroke.points || stroke.points.length === 0) continue;
+      ectx.beginPath();
+      ectx.lineWidth = stroke.width;
+      ectx.lineCap = "round";
+      const first = stroke.points[0];
+      if (!first) continue;
+      ectx.moveTo(first.x, first.y);
+      for (let i = 1; i < stroke.points.length; i++) {
+        const p = stroke.points[i];
+        if (!p) continue;
+        ectx.lineTo(p.x, p.y);
+      }
+      ectx.stroke();
+    } else {
+      const stamp = item as Stamp;
+      ectx.save();
+      ectx.textAlign = "center";
+      ectx.textBaseline = "middle";
+      ectx.font = `${stamp.size}px serif`;
+      ectx.fillText(stamp.emoji, stamp.x, stamp.y);
+      ectx.restore();
+    }
+  }
+
+  ectx.restore();
+
+  // trigger download
+  const anchor = document.createElement("a");
+  anchor.href = exportCanvas.toDataURL("image/png");
+  anchor.download = "sketchpad.png";
+  anchor.click();
 });
 
 function updateButtons() {
