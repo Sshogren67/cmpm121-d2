@@ -51,8 +51,14 @@ controls.appendChild(clearBtn);
 
 // Simple drawing logic using a display list + observer
 type Point = { x: number; y: number };
-type Stroke = { points: Point[]; width: number };
-type Stamp = { emoji: string; x: number; y: number; size: number };
+type Stroke = { points: Point[]; width: number; color: string };
+type Stamp = {
+  emoji: string;
+  x: number;
+  y: number;
+  size: number;
+  rotation: number;
+};
 
 let isDrawing = false;
 const ctx = canvas.getContext("2d");
@@ -69,16 +75,52 @@ const displayList: (Stroke | Stamp)[] = [];
 const undoStack: (Stroke | Stamp)[][] = [];
 const redoStack: (Stroke | Stamp)[][] = [];
 
+// Rotation state for stamp tools
+let currentRotation = 0;
+let isRotating = false;
+let rotationStartTime = 0;
+
+// Random tool variations
+let currentColor = "black";
+let previewRotation = 0;
+
+// Generate random color
+function getRandomColor(): string {
+  const colors = [
+    "black",
+    "red",
+    "blue",
+    "green",
+    "purple",
+    "orange",
+    "brown",
+    "pink",
+    "gray",
+    "cyan",
+  ];
+  return colors[Math.floor(Math.random() * colors.length)]!;
+}
+
+// Generate random rotation (0 to 360 degrees in radians)
+function getRandomRotation(): number {
+  return Math.random() * 2 * Math.PI;
+}
+
 function copyDisplayList(): (Stroke | Stamp)[] {
   return displayList.map((item) => {
     if ("points" in item) {
-      return { points: item.points.slice(), width: item.width } as Stroke;
+      return {
+        points: item.points.slice(),
+        width: item.width,
+        color: item.color,
+      } as Stroke;
     }
     return {
       emoji: item.emoji,
       x: item.x,
       y: item.y,
       size: item.size,
+      rotation: item.rotation,
     } as Stamp;
   });
 }
@@ -105,6 +147,8 @@ function setThickness(n: number) {
   // switching thickness returns tool to drawing mode
   clearToolSelection();
   currentThickness = n;
+  // randomize color for drawing tool
+  currentColor = getRandomColor();
   if (n === 2) {
     thinBtn.classList.add("active");
     thickBtn.classList.remove("active");
@@ -155,17 +199,30 @@ function clearToolSelection() {
   stampFrisbee.classList.remove("active");
   stampFrog.classList.remove("active");
   stampHand.classList.remove("active");
+  // clear any custom stamp buttons too
+  const customStamps = stampsRow.querySelectorAll(".stamp-custom");
+  customStamps.forEach((btn) => btn.classList.remove("active"));
 }
 
 function selectStamp(button: HTMLButtonElement, emoji: string) {
   if (currentToolEmoji === emoji) {
-    // toggle off
-    clearToolSelection();
+    // clicking same stamp again: randomize rotation for new variation
+    previewRotation = getRandomRotation();
+    // update overlay if cursor is over canvas
+    if (lastToolPos) {
+      drawCursorOverlay(lastToolPos, currentThickness);
+    }
     return;
   }
   clearToolSelection();
   currentToolEmoji = emoji;
+  // randomize initial rotation for this stamp
+  previewRotation = getRandomRotation();
   button.classList.add("active");
+  // update overlay if cursor is over canvas
+  if (lastToolPos) {
+    drawCursorOverlay(lastToolPos, currentThickness);
+  }
 }
 
 stampFrisbee.addEventListener("click", () => selectStamp(stampFrisbee, "🥏"));
@@ -232,6 +289,7 @@ exportBtn.addEventListener("click", () => {
       if (!stroke.points || stroke.points.length === 0) continue;
       ectx.beginPath();
       ectx.lineWidth = stroke.width;
+      ectx.strokeStyle = stroke.color;
       ectx.lineCap = "round";
       const first = stroke.points[0];
       if (!first) continue;
@@ -245,10 +303,12 @@ exportBtn.addEventListener("click", () => {
     } else {
       const stamp = item as Stamp;
       ectx.save();
+      ectx.translate(stamp.x, stamp.y);
+      ectx.rotate(stamp.rotation);
       ectx.textAlign = "center";
       ectx.textBaseline = "middle";
       ectx.font = `${stamp.size}px serif`;
-      ectx.fillText(stamp.emoji, stamp.x, stamp.y);
+      ectx.fillText(stamp.emoji, 0, 0);
       ectx.restore();
     }
   }
@@ -268,6 +328,24 @@ function updateButtons() {
   clearBtn.disabled = displayList.length === 0 && undoStack.length === 0;
 }
 
+// Rotation animation loop
+function updateRotation() {
+  if (isRotating && currentToolEmoji) {
+    const elapsed = Date.now() - rotationStartTime;
+    // Rotate at 1 revolution per second (2π radians per 1000ms)
+    currentRotation = (elapsed * 2 * Math.PI) / 1000;
+
+    // Update overlay if cursor is over canvas
+    if (lastToolPos) {
+      drawCursorOverlay(lastToolPos, currentThickness);
+    }
+  }
+  requestAnimationFrame(updateRotation);
+}
+
+// Start rotation animation loop
+updateRotation();
+
 // Helper to get canvas-relative point from mouse event
 function getCanvasPoint(e: MouseEvent) {
   const rect = canvas.getBoundingClientRect();
@@ -282,18 +360,40 @@ function clearOverlay() {
 function drawCursorOverlay(pos: Point, thickness: number) {
   if (!octx) return;
   octx.clearRect(0, 0, overlay.width, overlay.height);
-  // thin: draw a small filled point; thick: draw a circle outline with radius = thickness/2
+
+  // If stamp tool is selected, show emoji preview with current rotation
+  if (currentToolEmoji) {
+    const offsetY = Math.round(thickness / 2);
+    const drawY = pos.y + offsetY;
+    const size = Math.max(12, thickness * 8);
+
+    octx.save();
+    octx.translate(pos.x, drawY);
+    // Use previewRotation when not actively rotating, currentRotation when rotating
+    octx.rotate(isRotating ? currentRotation : previewRotation);
+    octx.textAlign = "center";
+    octx.textBaseline = "middle";
+    octx.font = `${size}px serif`;
+    octx.globalAlpha = 0.7; // semi-transparent preview
+    octx.fillText(currentToolEmoji, 0, 0);
+    octx.restore();
+    return;
+  }
+
+  // Default drawing tool cursor with current color
   octx.save();
   // shift the overlay slightly downward so it visually covers where the stroke will be drawn
   const offsetY = Math.round(thickness / 2);
   const drawY = pos.y + offsetY;
   if (thickness <= 2) {
-    octx.fillStyle = "rgba(0,0,0,0.9)";
+    octx.fillStyle = currentColor;
+    octx.globalAlpha = 0.7;
     octx.beginPath();
     octx.arc(pos.x, drawY, 1.5, 0, Math.PI * 2);
     octx.fill();
   } else {
-    octx.strokeStyle = "rgba(0,0,0,0.9)";
+    octx.strokeStyle = currentColor;
+    octx.globalAlpha = 0.7;
     octx.lineWidth = 1;
     octx.beginPath();
     octx.arc(pos.x, drawY, thickness / 2, 0, Math.PI * 2);
@@ -318,6 +418,7 @@ function redraw() {
       if (!first) continue;
       ctx.beginPath();
       ctx.lineWidth = stroke.width;
+      ctx.strokeStyle = stroke.color;
       ctx.moveTo(first.x, first.y);
       for (let i = 1; i < stroke.points.length; i++) {
         const p = stroke.points[i];
@@ -329,12 +430,14 @@ function redraw() {
       // stamp
       const stamp = item as Stamp;
       if (!stamp) continue;
-      // draw emoji centered at stamp.x, stamp.y
+      // draw emoji centered at stamp.x, stamp.y with rotation
       ctx.save();
+      ctx.translate(stamp.x, stamp.y);
+      ctx.rotate(stamp.rotation);
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.font = `${stamp.size}px serif`;
-      ctx.fillText(stamp.emoji, stamp.x, stamp.y);
+      ctx.fillText(stamp.emoji, 0, 0);
       ctx.restore();
     }
   }
@@ -358,19 +461,33 @@ canvas.addEventListener("tool-moved", (e) => {
 
 canvas.addEventListener("mousedown", (e) => {
   const pt = getCanvasPoint(e);
-  // If a stamp tool is selected, place a stamp instead of starting a stroke
+  // If a stamp tool is selected
   if (currentToolEmoji) {
-    // snapshot for undo
-    undoStack.push(copyDisplayList());
-    redoStack.length = 0;
-    // place stamp; align vertically with stroke offset so it lines up visually
-    const offsetY = Math.round(currentThickness / 2);
-    const stampY = pt.y + offsetY;
-    const size = Math.max(12, currentThickness * 8);
-    const stamp: Stamp = { emoji: currentToolEmoji, x: pt.x, y: stampY, size };
-    displayList.push(stamp);
-    canvas.dispatchEvent(new CustomEvent("drawing-changed"));
-    updateButtons();
+    if (isRotating) {
+      // Click while rotating: place stamp at current position with current rotation
+      undoStack.push(copyDisplayList());
+      redoStack.length = 0;
+      const offsetY = Math.round(currentThickness / 2);
+      const stampY = pt.y + offsetY;
+      const size = Math.max(12, currentThickness * 8);
+      const stamp: Stamp = {
+        emoji: currentToolEmoji,
+        x: pt.x,
+        y: stampY,
+        size,
+        rotation: isRotating ? currentRotation : previewRotation,
+      };
+      displayList.push(stamp);
+      canvas.dispatchEvent(new CustomEvent("drawing-changed"));
+      updateButtons();
+      isRotating = false;
+      currentRotation = 0;
+    } else {
+      // Start rotation mode
+      isRotating = true;
+      rotationStartTime = Date.now();
+      currentRotation = 0;
+    }
     return;
   }
 
@@ -381,7 +498,11 @@ canvas.addEventListener("mousedown", (e) => {
   redoStack.length = 0;
   // push current state to undo stack (shallow copy of strokes and their points)
   undoStack.push(copyDisplayList());
-  const stroke: Stroke = { points: [pt], width: currentThickness };
+  const stroke: Stroke = {
+    points: [pt],
+    width: currentThickness,
+    color: currentColor,
+  };
   displayList.push(stroke);
   // notify observers that the drawing changed
   canvas.dispatchEvent(new CustomEvent("drawing-changed"));
@@ -436,11 +557,14 @@ canvas.addEventListener("mouseleave", () => {
       canvas.style.cursor = "";
       clearOverlay();
       lastToolPos = null;
+      // stop rotation if active
+      if (isRotating) {
+        isRotating = false;
+        currentRotation = 0;
+      }
     }
   });
-});
-
-// Button handlers
+}); // Button handlers
 undoBtn.addEventListener("click", () => {
   if (undoStack.length === 0) return;
   // push current state to redo stack
@@ -451,9 +575,19 @@ undoBtn.addEventListener("click", () => {
   if (prev) {
     for (const s of prev) {
       if ("points" in s) {
-        displayList.push({ points: s.points.slice(), width: s.width });
+        displayList.push({
+          points: s.points.slice(),
+          width: s.width,
+          color: s.color,
+        });
       } else {
-        displayList.push({ emoji: s.emoji, x: s.x, y: s.y, size: s.size });
+        displayList.push({
+          emoji: s.emoji,
+          x: s.x,
+          y: s.y,
+          size: s.size,
+          rotation: s.rotation,
+        });
       }
     }
   }
@@ -470,9 +604,19 @@ redoBtn.addEventListener("click", () => {
   if (next) {
     for (const s of next) {
       if ("points" in s) {
-        displayList.push({ points: s.points.slice(), width: s.width });
+        displayList.push({
+          points: s.points.slice(),
+          width: s.width,
+          color: s.color,
+        });
       } else {
-        displayList.push({ emoji: s.emoji, x: s.x, y: s.y, size: s.size });
+        displayList.push({
+          emoji: s.emoji,
+          x: s.x,
+          y: s.y,
+          size: s.size,
+          rotation: s.rotation,
+        });
       }
     }
   }
